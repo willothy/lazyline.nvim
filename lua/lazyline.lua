@@ -1,4 +1,6 @@
+-- private definitions go here. they will be accessible from M, but not visible
 local P = {}
+-- anything delared directly on M will be exported
 local M = {}
 
 M.NAME = "LazyLine"
@@ -20,9 +22,20 @@ P.hovered = false
 ---@type Component[]
 P.components = {}
 
+---@type integer[]
+P.left = {}
+
+---@type integer[]
+P.right = {}
+
+---@type integer[]
+P.center = {}
+
 P.config = {
   ---@type (Component | Group)[]
-  components = {},
+  left = {},
+  center = {},
+  right = {},
 }
 
 function P.click(id, ...)
@@ -60,6 +73,21 @@ function P.create_updater(event)
   })
 end
 
+function P.next_id()
+  return #M.components + 1
+end
+
+function P.section_width(section)
+  return vim
+    .iter(M[section])
+    :map(function(id)
+      return M.components[id]
+    end)
+    :fold(0, function(acc, c)
+      return acc + c.width
+    end)
+end
+
 function P.mouse_leave()
   if M.hovered then
     if M.hovered.mouse_leave then
@@ -74,6 +102,9 @@ end
 ---@param component Component
 function P.mouse_enter(component)
   if M.hovered then
+    if M.hovered.id == component.id then
+      return
+    end
     M.mouse_leave()
   end
   M.hovered = component
@@ -82,10 +113,6 @@ function P.mouse_enter(component)
     component:mouse_enter()
   end
   component:render()
-end
-
-function P.next_id()
-  return #M.components + 1
 end
 
 function P.mouse_move()
@@ -98,8 +125,42 @@ function P.mouse_move()
     return
   end
 
+  local center_len = P.section_width("center")
+  local right_len = P.section_width("right")
+
+  local screen_center = math.ceil(vim.o.columns / 2)
+  local centered = math.floor(screen_center - (center_len / 2))
+
   local current_width = 0
-  for _, component in ipairs(M.components) do
+  for _, id in ipairs(M.left) do
+    local component = M.components[id]
+    current_width = current_width + component.width
+    if x <= current_width then
+      M.mouse_enter(component)
+      return
+    end
+  end
+  current_width = centered
+  if x <= current_width then
+    M.mouse_leave()
+    return
+  end
+  for _, id in ipairs(M.center) do
+    local component = M.components[id]
+    current_width = current_width + component.width
+    if x <= current_width then
+      M.mouse_enter(component)
+      return
+    end
+  end
+
+  current_width = vim.o.columns - right_len
+  if x <= current_width then
+    M.mouse_leave()
+    return
+  end
+  for _, id in ipairs(M.right) do
+    local component = M.components[id]
     current_width = current_width + component.width
     if x <= current_width then
       M.mouse_enter(component)
@@ -110,16 +171,71 @@ function P.mouse_move()
 end
 
 function P.statusline(_win)
-  local str = ""
-  for id, component in ipairs(M.components) do
+  local left_str = ""
+  for _, id in ipairs(M.left) do
+    local component = M.components[id]
     if M.cache[id] then
-      str = str .. M.cache[id]
+      left_str = left_str .. M.cache[id]
     elseif not component.lazy then
-      str = str .. component:render()
+      left_str = left_str .. component:render()
     elseif component.default then
-      str = str .. component.default
+      left_str = left_str .. component.default
+      component.width = vim.fn.strcharlen(component.default)
     end
   end
+
+  local center_str = ""
+  for _, id in ipairs(M.center) do
+    local component = M.components[id]
+    if M.cache[id] then
+      center_str = center_str .. M.cache[id]
+    elseif not component.lazy then
+      center_str = center_str .. component:render()
+    elseif component.default then
+      center_str = center_str .. component.default
+      component.width = vim.fn.strcharlen(component.default)
+    end
+  end
+
+  local right_str = ""
+  for _, id in ipairs(M.right) do
+    local component = M.components[id]
+    if M.cache[id] then
+      right_str = right_str .. M.cache[id]
+    elseif not component.lazy then
+      right_str = right_str .. component:render()
+    elseif component.default then
+      right_str = right_str .. component.default
+      component.width = vim.fn.strcharlen(component.default)
+    end
+  end
+
+  local left_len = P.section_width("left")
+  local center_len = P.section_width("center")
+  local right_len = P.section_width("right")
+
+  local center = math.ceil(vim.o.columns / 2)
+
+  local centered = math.floor(center - (center_len / 2))
+
+  local str = left_str
+
+  if #left_str > centered then
+    str = str:sub(1, centered)
+  else
+    str = str .. string.rep(" ", centered - left_len)
+  end
+
+  str = str .. center_str
+
+  if #str + right_len > vim.o.columns then
+    str = str:sub(1, vim.o.columns - right_len)
+  else
+    str = str .. string.rep(" ", centered - right_len + 1)
+  end
+
+  str = str .. right_str
+
   return str
 end
 
@@ -168,7 +284,7 @@ Group.__index = Group
 local Component = {}
 Component.__index = Component
 
-function Group.new(o)
+function Group.new(o, section)
   setmetatable(o, Group)
   o.components = {}
   for i, component in ipairs(o) do
@@ -190,14 +306,14 @@ function Group.new(o)
     component.underline = component.underline or o.underline
     component.undercurl = component.undercurl or o.undercurl
     component.hl = component.hl or o.hl
-    o.components[i] = Component.new(component)
+    o.components[i] = Component.new(component, section)
   end
   return o
 end
 
 ---@param id integer
 ---@param o Component
-function Component.new(o)
+function Component.new(o, section)
   setmetatable(o, Component)
   local id = M.next_id()
   o.id = id
@@ -210,6 +326,7 @@ function Component.new(o)
     end
   end
   M.components[id] = o
+  table.insert(M[section], id)
   if o.update then
     for _, event in pairs(o.update) do
       if not M.updaters[event] then
@@ -281,6 +398,8 @@ function Component:render()
   return str
 end
 
+local on_key
+
 function M.setup(config)
   if vim.o.laststatus ~= 3 then
     vim.notify(
@@ -295,20 +414,41 @@ function M.setup(config)
   M.config = vim.tbl_deep_extend("force", M.config, config or {})
 
   M.components = {}
+  M.left = {}
+  M.center = {}
+  M.right = {}
 
-  vim.iter(M.config.components):each(function(component)
+  vim.iter(M.config.left):each(function(component)
     if component[1] then
-      Group.new(component)
+      Group.new(component, "left")
     else
-      Component.new(component)
+      Component.new(component, "left")
     end
   end)
 
-  vim.on_key(function(k)
-    if k == vim.keycode("<MouseMove>") then
-      M.mouse_move()
+  vim.iter(M.config.center):each(function(component)
+    if component[1] then
+      Group.new(component, "center")
+    else
+      Component.new(component, "center")
     end
   end)
+
+  vim.iter(M.config.right):each(function(component)
+    if component[1] then
+      Group.new(component, "right")
+    else
+      Component.new(component, "right")
+    end
+  end)
+
+  if not on_key then
+    on_key = vim.on_key(function(k)
+      if k == vim.keycode("<MouseMove>") then
+        M.mouse_move()
+      end
+    end)
+  end
 
   vim.o.statusline = "%{%v:lua.require'"
     .. M.MODULE
