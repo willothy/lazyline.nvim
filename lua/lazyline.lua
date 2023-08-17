@@ -214,25 +214,24 @@ function P.statusline(_win)
   local center_len = P.section_width("center")
   local right_len = P.section_width("right")
 
-  local center = math.ceil(vim.o.columns / 2)
+  local center = math.floor(vim.o.columns / 2)
 
-  local centered = math.floor(center - (center_len / 2))
+  local centered = center - (center_len / 2)
 
   local str = left_str
 
   if #left_str > centered then
     str = str:sub(1, centered)
   else
-    str = str .. string.rep(" ", centered - left_len)
+    str = str .. string.rep(" ", math.floor(centered) - left_len)
   end
 
-  str = str .. center_str
-
-  if #str + right_len > vim.o.columns then
-    str = str:sub(1, vim.o.columns - right_len)
-  else
-    str = str .. string.rep(" ", centered - right_len + 1)
-  end
+  str = str
+    .. center_str
+    .. string.rep(
+      " ",
+      math.max(0, (vim.o.columns - math.ceil(centered)) - right_len + 1)
+    )
 
   str = str .. right_str
 
