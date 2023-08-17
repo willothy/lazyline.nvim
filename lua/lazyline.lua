@@ -48,28 +48,47 @@ end
 ---@param event string
 function P.event_key(event)
   local pattern
-  if event:sub(1, 4) == "User" then
-    pattern = event:sub(6)
-    event = "User"
+  local split = vim.split(event, " ")
+  event = split[1]
+  pattern = vim.list_slice(split, 2)
+  local n = #pattern
+  local pat_str = ""
+  if n == 0 then
+    pattern = nil
+  elseif n == 1 then
+    pat_str = pattern[1]
+    pattern = pattern[1]
+  else
+    pat_str = table.concat(pattern, "_")
   end
-  local key = event .. (pattern or "")
-  return key, pattern
+  local key = event .. pat_str
+  return key, event, pattern
 end
 
 ---@param event string
 function P.create_updater(event)
-  local key, pattern = M.event_key(event)
+  local key, pattern
+  key, event, pattern = M.event_key(event)
 
   M.updaters[key] = {}
 
   vim.api.nvim_create_autocmd(event, {
     group = M.augroup,
     pattern = pattern,
-    callback = function()
+    callback = vim.schedule_wrap(function()
+      local visited = {}
       for id in pairs(M.updaters[key]) do
-        M.components[id]:render()
+        if not visited[id] then
+          visited[id] = true
+          local component = M.components[id]
+          if component.lazy then
+            component:render()
+          else
+            M.cache[id] = nil
+          end
+        end
       end
-    end,
+    end),
   })
 end
 
@@ -170,7 +189,11 @@ function P.mouse_move()
   M.mouse_leave()
 end
 
-function P.statusline(_win)
+function P.statusline(win)
+  return vim.api.nvim_win_call(tonumber(win), P.render)
+end
+
+function P.render()
   local left_str = ""
   for _, id in ipairs(M.left) do
     local component = M.components[id]
